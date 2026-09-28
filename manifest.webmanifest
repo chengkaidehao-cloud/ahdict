@@ -1,0 +1,18 @@
+{
+  "name": "新编阿汉大词典",
+  "short_name": "阿汉词典",
+  "description": "《新编阿汉大词典》离线检索阅读器：阿拉伯语词根索引 + 中文释义全文检索",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#111418",
+  "theme_color": "#1f2937",
+  "lang": "zh-CN",
+  "dir": "ltr",
+  "icons": [
+    { "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

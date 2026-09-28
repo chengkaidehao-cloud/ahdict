@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#1f2937">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="阿汉大词典">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./icons/icon-192.png">
+<title>新编阿汉大词典</title>
+<link rel="stylesheet" href="./styles.css?v=4">
+</head>
+<body>
+
+<header id="topbar">
+  <button id="btn-menu" class="icon-btn" title="词根目录" aria-label="词根目录">☰</button>
+  <div class="search-wrap">
+    <input id="search" type="search" autocomplete="off" autocorrect="off" spellcheck="false"
+           placeholder="输入阿拉伯语词 / 中文释义…" aria-label="搜索">
+    <button id="btn-arkb" class="kb-btn" title="阿拉伯语键盘" aria-label="阿拉伯语键盘">ع</button>
+    <button id="btn-clear" class="clear-btn" hidden aria-label="清除">✕</button>
+  </div>
+  <button id="btn-more" class="icon-btn" title="设置" aria-label="设置">⋯</button>
+</header>
+
+<div id="status" class="status" hidden></div>
+
+<main id="viewer">
+  <div id="stage">
+    <canvas id="page-canvas"></canvas>
+    <div id="highlight-layer"></div>
+  </div>
+</main>
+
+<footer id="bottombar">
+  <button id="btn-prev" class="nav-btn" aria-label="上一页">‹</button>
+  <div class="page-box">
+    <input id="page-input" type="number" inputmode="numeric" min="1" aria-label="页码">
+    <span id="page-total">/ 2372</span>
+  </div>
+  <button id="btn-next" class="nav-btn" aria-label="下一页">›</button>
+  <button id="btn-view" class="nav-btn small" aria-label="切换视图" title="整页 / 单栏">▯</button>
+  <button id="btn-zoom-out" class="nav-btn small" aria-label="缩小">−</button>
+  <button id="btn-zoom-in" class="nav-btn small" aria-label="放大">＋</button>
+</footer>
+
+<!-- 搜索结果面板 -->
+<section id="results" hidden>
+  <div class="panel-head">
+    <span id="results-title">搜索结果</span>
+    <button id="btn-close-results" class="icon-btn" aria-label="关闭">✕</button>
+  </div>
+  <div id="results-list"></div>
+</section>
+
+<!-- 词根目录抽屉 -->
+<aside id="drawer" hidden>
+  <div class="panel-head">
+    <span id="drawer-title">词根目录</span>
+    <button id="btn-close-drawer" class="icon-btn" aria-label="关闭">✕</button>
+  </div>
+  <div class="drawer-tabs">
+    <button class="dtab active" data-tab="tree">词根目录</button>
+    <button class="dtab" data-tab="words">生词本<i class="cnt" id="cnt-words">0</i></button>
+    <button class="dtab" data-tab="history">历史<i class="cnt" id="cnt-history">0</i></button>
+  </div>
+  <div id="pane-tree" class="dpane">
+    <div id="tree-search-wrap"><input id="tree-search" type="search" placeholder="过滤词根…" autocomplete="off"></div>
+    <div id="tree"></div>
+  </div>
+  <div id="pane-words" class="dpane" hidden>
+    <div class="dlist" id="words-list"></div>
+    <div class="dpane-foot">
+      <button id="btn-export-words" class="btn small">导出 Markdown</button>
+      <button id="btn-clear-words" class="btn small ghost">清空</button>
+    </div>
+  </div>
+  <div id="pane-history" class="dpane" hidden>
+    <div class="dlist" id="history-list"></div>
+    <div class="dpane-foot">
+      <button id="btn-clear-history" class="btn small ghost">清空历史</button>
+    </div>
+  </div>
+</aside>
+<div id="scrim" hidden></div>
+
+<!-- 阿拉伯语软键盘（点搜索框旁的 ع 打开）-->
+<div id="arkb" hidden>
+  <div class="arkb-head">
+    <span>阿拉伯语键盘</span>
+    <span class="muted">点字母即插入搜索框</span>
+    <button id="btn-close-arkb" class="icon-btn" aria-label="关闭">✕</button>
+  </div>
+  <div id="arkb-keys"></div>
+</div>
+
+<!-- 设置/更多 -->
+<section id="settings" hidden>
+  <div class="panel-head">
+    <span>设置</span>
+    <button id="btn-close-settings" class="icon-btn" aria-label="关闭">✕</button>
+  </div>
+  <div class="settings-body">
+    <div class="row">
+      <label for="opt-rtl">阿拉伯语搜索方向归一化</label>
+      <input id="opt-rtl" type="checkbox" checked>
+    </div>
+    <div class="row">
+      <label for="opt-hl">搜索命中高亮</label>
+      <input id="opt-hl" type="checkbox" checked>
+    </div>
+    <div class="row">
+      <label for="opt-cache">离线缓存整本 PDF</label>
+      <button id="btn-cache-pdf" class="btn">开始缓存</button>
+    </div>
+    <div class="row col">
+      <div class="muted" id="cache-status">未缓存</div>
+    </div>
+    <div class="row col">
+      <div class="muted" id="secure-note"></div>
+    </div>
+    <div class="row col">
+      <button id="btn-open-file" class="btn">从手机本地打开 PDF</button>
+      <input id="file-input" type="file" accept="application/pdf" hidden>
+    </div>
+    <div class="row col">
+      <div class="muted" id="engine-status">引擎状态</div>
+    </div>
+  </div>
+</section>
+
+<script type="module" src="./app.js?v=4"></script>
+</body>
+</html>

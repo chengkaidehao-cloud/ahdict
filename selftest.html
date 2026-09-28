@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>自检 · 新编阿汉大词典</title>
+<style>
+  body { margin:0; padding:16px; background:#111418; color:#e8edf3;
+         font:14px/1.5 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }
+  h1 { font-size:17px; margin:0 0 12px; }
+  .item { padding:10px 12px; border:1px solid #333c47; border-radius:10px; margin-bottom:8px; background:#1b2027; }
+  .ok { border-color:#2e7d32; } .fail { border-color:#c62828; } .warn { border-color:#f9a825; }
+  .name { font-weight:600; }
+  .tag { float:right; font-size:12px; padding:1px 7px; border-radius:6px; }
+  .ok .tag { background:#2e7d32; } .fail .tag { background:#c62828; } .warn .tag { background:#f9a825; color:#222; }
+  .detail { color:#97a3b2; font-size:12.5px; margin-top:3px; word-break:break-all; white-space:pre-wrap; }
+  #summary { font-size:15px; font-weight:700; margin:12px 0; }
+  canvas { max-width:100%; border:1px solid #333c47; border-radius:6px; margin-top:8px; background:#fff; }
+  button { margin-top:10px; padding:10px 14px; border-radius:9px; background:#4c9aff; color:#fff; border:0; font-weight:600; }
+  a { color:#4c9aff; }
+</style>
+</head>
+<body>
+<h1>系统自检 · 新编阿汉大词典</h1>
+<div id="summary">检测中…</div>
+<div id="list"></div>
+<canvas id="c"></canvas>
+<button onclick="location.href='./index.html'">进入词典</button>
+
+<script type="module">
+const list = document.getElementById('list');
+const results = [];
+function add(name, ok, detail) {
+  const st = ok === true ? 'ok' : ok === 'warn' ? 'warn' : 'fail';
+  const d = document.createElement('div');
+  d.className = 'item ' + st;
+  d.innerHTML = `<span class="tag">${st === 'ok' ? '通过' : st === 'warn' ? '注意' : '失败'}</span>
+                 <div class="name">${name}</div><div class="detail"></div>`;
+  d.querySelector('.detail').textContent = detail || '';
+  list.appendChild(d);
+  results.push({ name, st, detail });
+  document.getElementById('summary').textContent =
+    `进度 ${results.length} · 通过 ${results.filter(r=>r.st==='ok').length} · 失败 ${results.filter(r=>r.st==='fail').length}`;
+}
+
+// 1) 环境能力
+add('运行环境', true, `UA: ${navigator.userAgent}\n视口: ${innerWidth}x${innerHeight} dpr=${devicePixelRatio}\nWASM: ${typeof WebAssembly!=='undefined'} · ServiceWorker: ${'serviceWorker' in navigator} · CacheStorage: ${'caches' in window} · IndexedDB: ${'indexedDB' in window}`);
+
+// 2) 索引（原合并的 search-index.json 已废弃，改读 roots.json + pages.json）
+let idx = null;
+try {
+  const t0 = performance.now();
+  const rr = await fetch('./data/roots.json');
+  const jr = await rr.json();
+  const rp = await fetch('./data/pages.json');
+  const jp = await rp.json();
+  idx = { roots: jr.roots, pages: jp.pages };
+  const ms = Math.round(performance.now() - t0);
+  const mb = ((JSON.stringify(jr).length + JSON.stringify(jp).length) / 1e6).toFixed(2);
+  add('搜索索引加载', idx.roots?.length > 0 && idx.pages?.length > 0, `词根 ${idx.roots?.length} 条 · 页文本 ${idx.pages?.length} 页 · ${mb}MB · ${ms}ms`);
+} catch (e) { add('搜索索引加载', false, String(e)); }
+
+// 3) 目录树
+try {
+  const r = await fetch('./data/outline.json');
+  const o = await r.json();
+  const cnt = (function c(l){ return l.reduce((a,n)=>a+1+c(n.children||[]),0); })(o);
+  add('书签目录树', o.length > 0, `顶层 ${o.length} 项 · 总节点 ${cnt} · 首项 ${JSON.stringify(o[0]?.title)} → p${o[0]?.page}`);
+} catch (e) { add('书签目录树', false, String(e)); }
+
+// 4) OCR 索引可用性
+try {
+  const r = await fetch('./data/ocr/pages/p0011.json');
+  const j = await r.json();
+  const cn = j.cn ? (j.cn.words || []).length : 0;
+  const ar = j.ar ? (j.ar.words || []).length : 0;
+  add('OCR 高亮数据', cn > 0, `p11 中文词 ${cn} · 阿语词 ${ar} · 中文图 ${j.cn?.w}x${j.cn?.h}${j.ar ? ` · 阿语图 ${j.ar.w}x${j.ar.h}` : ' · 阿语数据未就绪'}`);
+} catch (e) { add('OCR 高亮数据', false, String(e)); }
+
+// 4b) 阿语词形索引
+try {
+  const r = await fetch('./data/ar-index.json');
+  const j = await r.json();
+  const n = j.pages?.length || 0;
+  add('阿语词形索引', n > 0, `${n} 页含阿语词形骨架 · 样本: ${j.pages?.[0] ? `p${j.pages[0].p} (${j.pages[0].ws?.length} 个骨架)` : '无'}`);
+} catch (e) { add('阿语词形索引', false, String(e)); }
+
+// 5) PDF 加载 + 渲染（分步报告 + 超时，便于定位卡点）
+const withTimeout = (p, ms, label) => Promise.race([
+  p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${label} 超过 ${ms}ms 未完成`)), ms)),
+]);
+try {
+  const t0 = performance.now();
+  const pdfjsLib = await import('./vendor/pdf.mjs');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('./vendor/pdf.worker.mjs', location.href).href;
+  add('pdf.js 模块加载', true, `用时 ${Math.round(performance.now()-t0)}ms · workerSrc 已设置`);
+
+  const t1 = performance.now();
+  const doc = await withTimeout(pdfjsLib.getDocument({
+    url: new URL('./新编阿汉大词典.pdf', location.href).href,
+    wasmUrl: new URL('./vendor/wasm/', location.href).href,
+    useSystemFonts: false, disableFontFace: true, isEvalSupported: false, verbosity: 0,
+  }).promise, 90000, 'PDF 打开');
+  add('PDF 打开', doc.numPages > 0, `${doc.numPages} 页 · 用时 ${Math.round(performance.now()-t1)}ms`);
+
+  const t2 = performance.now();
+  const page = await withTimeout(doc.getPage(11), 30000, '取第 11 页');
+  const vp = page.getViewport({ scale: 1.2 });
+  const c = document.getElementById('c');
+  c.width = vp.width; c.height = vp.height;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0,0,c.width,c.height);
+  await withTimeout(page.render({ canvasContext: ctx, viewport: vp }).promise, 60000, '渲染第 11 页');
+  const tRender = Math.round(performance.now() - t2);
+  const img = ctx.getImageData(0,0,c.width,c.height).data;
+  let dark = 0;
+  for (let i=0;i<img.length;i+=4*13) if (img[i] < 128) dark++;
+  add('JBIG2 页面渲染（关键）', dark > 50, `第 11 页 ${Math.round(vp.width)}x${Math.round(vp.height)} · 深色采样 ${dark} · 用时 ${tRender}ms\n${dark > 50 ? '✓ 扫描图像解码正常' : '⚠ 页面空白：jbig2.wasm 可能未加载'}`);
+} catch (e) { add('PDF 打开 / 渲染', false, String((e && e.message) || e)); }
+
+// 6) 搜索逻辑
+if (idx) {
+  const AR = /[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED\u0640]/g;
+  const normAr = s => (s||'').replace(AR,'').replace(/[\u0622\u0623\u0625\u0671]/g,'\u0627').replace(/\u0649/g,'\u064A').replace(/\u0629/g,'\u0647').replace(/[^\u0600-\u06FF]/g,'');
+  const sk = s => normAr(s).replace(/[\u0627\u0648\u064A]/g,'');
+  const arSearch = q => {
+    const nq = normAr(q), s = sk(q), out = [];
+    for (const r of idx.roots) {
+      const c = r.k; let sc = 0;
+      if (c === nq) sc = 100;
+      else if (c.startsWith(nq) && nq.length >= 2) sc = 80 - c.length;
+      const cs = sk(c);
+      if (!sc && s.length >= 3 && cs.length >= 3) {
+        if (cs === s) sc = 90; else if (cs.startsWith(s)) sc = 78; else if (s.startsWith(cs)) sc = 70;
+        else if (s.includes(cs)) sc = 55; else if (cs.includes(s)) sc = 48;
+      }
+      if (sc > 0) out.push({ root: r.t, page: r.p, sc });
+    }
+    return out.sort((a,b)=>b.sc-a.sc).slice(0,5);
+  };
+  const tests = ['كتاب','مدرسة','ذهب','استقبال'];
+  const lines = tests.map(w => { const r = arSearch(w); return `${w} → ${r.length?r.map(x=>`${x.root}@p${x.page}`).join(', '):'无结果'}`; });
+  add('阿拉伯语词根检索', lines.every(l=>!l.includes('无结果')), lines.join('\n'));
+
+  const cn = ['图书馆','民族','阿拉伯','大学'];
+  const t0 = performance.now();
+  const cl = cn.map(w => { const hits = idx.pages.filter(p => p.t.includes(w)); return `${w} → ${hits.length} 页${hits.length?'（如 p'+hits[0].p+'）':''}`; });
+  add('中文释义检索', cl.some(l=>!/→ 0 页/.test(l)), cl.join('\n') + `\n全库扫描用时 ${Math.round(performance.now()-t0)}ms`);
+}
+
+add('自检完成', true, `完成于 ${new Date().toLocaleString()} · 共 ${results.length} 项`);
+
+// 回传报告（便于远程诊断；失败不影响使用）
+try {
+  await fetch('/report', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ at: new Date().toISOString(), ua: navigator.userAgent, viewport: `${innerWidth}x${innerHeight}`, results }, null, 1),
+  });
+} catch { /* ignore */ }
+</script>
+</body>
+</html>
