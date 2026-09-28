@@ -65,6 +65,12 @@ function hasCJK(s) { return /[\u3400-\u4DBF\u4E00-\u9FFF]/.test(s); }
 function normAr(s) {
   return (s || '')
     .replace(AR_DIACRITICS, '')
+    // 同类字母的编码变体归一化：波斯/乌尔都语键盘、或从网页复制时很常见。
+    // 不处理的话「کتاب」完全匹配不上「كتب」—— 这是实测可复现的失效场景。
+    // 注意：گ پ چ ژ 属于不同字母，故意不映射，避免引入错误匹配。
+    .replace(/[کڪ]/g, "ك")      // 波斯/信德语 kaf → 阿拉伯语 kaf
+    .replace(/[یې]/g, "ي")      // 波斯/普什图语 yeh → 阿拉伯语 yeh
+    .replace(/[ہھۀە]/g, "ه")    // 乌尔都/普什图语 heh → 阿拉伯语 heh
     .replace(/[\u0622\u0623\u0625\u0671]/g, '\u0627')
     .replace(/\u0649/g, '\u064A')
     .replace(/\u0629/g, '\u0647')
