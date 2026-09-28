@@ -789,19 +789,85 @@ async function cachePdf() {
     return;
   }
   if (!('caches' in window)) { toast('浏览器不支持缓存'); return; }
+
+  const btn = $('btn-cache-pdf');
+  const setStatus = (t) => { if (el.cacheStatus) el.cacheStatus.textContent = t; };
+  const setBtn = (t, dis) => { if (btn) { btn.textContent = t; btn.disabled = !!dis; } };
+
   try {
-    const cache = await caches.open('ahdict-pdf-v1');
-    toast('开始缓存 PDF（约 89MB），请保持页面打开…', 4000);
+    // ① 申请持久化存储：否则浏览器在存储紧张时会自动清理缓存，
+    //    表现就是「某天离线缓存突然没了」。这一步是可靠性的关键。
+    let persisted = false;
+    try {
+      if (navigator.storage && navigator.storage.persist) persisted = await navigator.storage.persist();
+    } catch { /* 不支持则不阻断 */ }
+
+    // ② 配额预检：空间不足时提前告知，而不是下载到一半失败
+    try {
+      if (navigator.storage && navigator.storage.estimate) {
+        const est = await navigator.storage.estimate();
+        const free = (est.quota || 0) - (est.usage || 0);
+        if (free > 0 && free < 140 * 1048576) {
+          toast('存储空间可能不足：剩余 ' + (free / 1048576).toFixed(0) + ' MB，本操作需要约 86 MB', 6000);
+        }
+      }
+    } catch { /* ignore */ }
+
+    setBtn('缓存中…', true);
+    setStatus('正在缓存… 0%');
+    toast('开始缓存 PDF（85 MB），请保持页面打开', 4000);
+
+    // ③ 流式下载 + 实时进度：用 ReadableStream 边读边转发，
+    //    既能看到进度，又不会把 85MB 全读进 JS 内存。
     const resp = await fetch(PDF_URL);
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    await cache.put(PDF_URL, resp.clone());
-    el.cacheStatus.textContent = '已缓存整本 PDF（离线可读）';
-    toast('PDF 已缓存，可离线使用');
+    const total = Number(resp.headers.get('content-length') || 0);
+    let got = 0;
+    let shown = -1;
+    const src = resp.body.getReader();
+    const stream = new ReadableStream({
+      async pull(controller) {
+        const { value, done } = await src.read();
+        if (done) { controller.close(); return; }
+        got += value.byteLength;
+        if (total) {
+          const pct = Math.floor((got / total) * 100);
+          const step = pct - (pct % 5);
+          if (step > shown) {
+            shown = step;
+            setStatus('正在缓存… ' + step + '%（' + (got / 1048576).toFixed(0) + ' / ' + (total / 1048576).toFixed(0) + ' MB）');
+          }
+        }
+        controller.enqueue(value);
+      },
+      cancel() { try { src.cancel(); } catch { /* ignore */ } },
+    });
+
+    const cache = await caches.open('ahdict-pdf-v1');
+    await cache.put(PDF_URL, new Response(stream, {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/pdf',
+        'Content-Length': String(total || got),
+        'Accept-Ranges': 'bytes',
+      },
+    }));
+
+    // ④ 缓存后校验：确认存入的是完整文件。
+    //    若 content-length 缺失，离线时的 Range 切片会失效（退回返回完整文件）。
+    const hit = await cache.match(PDF_URL, { ignoreSearch: true });
+    const stored = hit ? Number(hit.headers.get('content-length') || 0) : 0;
+    if (!stored || (total && stored !== total)) throw new Error('缓存校验失败（' + stored + ' / ' + total + '）');
+
+    setStatus('已缓存整本 PDF（' + (stored / 1048576).toFixed(1) + ' MB）' + (persisted ? ' · 已申请持久化存储' : ' · 建议「添加到主屏幕」以防被浏览器清理'));
+    setBtn('重新缓存', false);
+    toast('PDF 已缓存（' + (stored / 1048576).toFixed(0) + ' MB），断网也能查词', 4000);
   } catch (e) {
-    toast('缓存失败：' + e.message);
+    setStatus('缓存失败：' + e.message);
+    setBtn('重试缓存', false);
+    toast('缓存失败：' + e.message + '（可点「重试缓存」）', 6000);
   }
 }
-
 async function checkCache() {
   const note = $('secure-note');
   const btn = $('btn-cache-pdf');
