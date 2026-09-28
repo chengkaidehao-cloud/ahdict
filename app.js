@@ -11,7 +11,7 @@ const TOTAL_PAGES = 2372;
 const S = {
   doc: null,
   page: 1,
-  zoom: 1,
+  zoom: 1,              // 视觉倍率（1 = 适配屏幕）；只进 CSS transform，不影响渲染
   tx: 0, ty: 0,
   rendering: false,
   pendingPage: null,
@@ -33,6 +33,14 @@ const S = {
 const DPR_MAX = 3;          // 用满手机物理分辨率（此前截断到 2 导致欠采样）
 const SCAN_WIDTH = 2144;    // 原始扫描图宽度（渲染分辨率上限）
 const MAX_CANVAS_PIXELS = 12e6;  // canvas 面积上限（iOS Safari 约 16.7M 硬限制，留余量）
+
+// 缩放：S.zoom 是「视觉倍率」，由 #stage 的 CSS transform 承担 —— 捏合期间零重渲染。
+// 位图倍率只由「适配屏幕」决定，见 优化方案-缩放跟手与历史扩容.md
+const ZOOM_MIN = 0.6;
+const ZOOM_MAX = 6;
+// 整页模式位图多渲染 1.5 倍：该模式 fit 位图仅约 1170px 宽 < 原扫描图 2144px，
+// 有真实细节可提，放大到 1.5× 之前无需重渲染也保持锐利（单栏模式已超采样，无需此系数）
+const PAGE_MODE_SHARP = 1.5;
 
 /* ============================ DOM ============================ */
 const $ = (id) => document.getElementById(id);
@@ -78,6 +86,7 @@ function normAr(s) {
 }
 // 弱字母剥离 → 辅音骨架（近似词根）
 function skeleton(s) { return normAr(s).replace(/[\u0627\u0648\u064A]/g, ''); }
+
 // 词根字符串 "أ-ب-ب" → 紧凑 "أبب"
 function rootCompact(t) { return normAr((t || '').replace(/[-\s\u2010-\u2015]/g, '')); }
 
@@ -137,7 +146,11 @@ async function renderPage(n) {
     // 否则在 dpr=3 的手机上单栏视图会因原图分辨率不足而字号偏小
     const dpr = Math.min(window.devicePixelRatio || 1, DPR_MAX);
     const maxScale = (SCAN_WIDTH * 1.6) / base.width;
-    let scale = Math.min(fit * S.zoom * dpr, maxScale);
+    // ★ 位图倍率不含 S.zoom：缩放改由 CSS transform 承担（GPU 合成，捏合即时跟手）。
+    //   实测：单栏位图已达 2340px > 原扫描图 2144px，靠重渲染放大拿不到任何新细节，
+    //   只换来 300-800ms 卡顿（这正是「缩放不流畅」的主因）。
+    const sharp = S.viewMode === 'page' ? PAGE_MODE_SHARP : 1;
+    let scale = Math.min(fit * sharp * dpr, maxScale);
     // canvas 面积上限：iOS Safari 对 canvas 像素数有硬限制，超了会变空白甚至崩溃
     const pxArea = base.width * scale * base.height * scale;
     if (pxArea > MAX_CANVAS_PIXELS) scale = Math.sqrt(MAX_CANVAS_PIXELS / (base.width * base.height));
@@ -190,7 +203,9 @@ async function renderPage(n) {
 
 /* ============================ 视图变换（缩放/平移） ============================ */
 function clampTransform() {
-  const cw = el.canvas.clientWidth, ch = el.canvas.clientHeight;
+  // 可视尺寸 = 位图 CSS 尺寸 × 视觉倍率（transform: scale 不改变 clientWidth）
+  const z = S.zoom;
+  const cw = el.canvas.clientWidth * z, ch = el.canvas.clientHeight * z;
   const vw = el.viewer.clientWidth, vh = el.viewer.clientHeight;
   const maxX = Math.max(0, cw - vw), maxY = Math.max(0, ch - vh);
   S.tx = Math.min(0, Math.max(-maxX, S.tx));
@@ -200,7 +215,27 @@ function clampTransform() {
 }
 function applyTransform() {
   clampTransform();
-  el.stage.style.transform = `translate3d(${S.tx}px, ${S.ty}px, 0)`;
+  // 合成顺序 = 先 scale 后 translate，作用于内容点 p 得 p*z + t，
+  // 故 (tx,ty) 始终是「screen = content × zoom + t」里的 t，下方锚点公式都基于此。
+  el.stage.style.transform = `translate3d(${S.tx}px, ${S.ty}px, 0) scale(${S.zoom})`;
+}
+
+// 手势里的样式写入统一走 rAF 节流，避免每个 pointermove 都触发一次样式重算
+let framePending = false;
+function scheduleFrame() {
+  if (framePending) return;
+  framePending = true;
+  requestAnimationFrame(() => { framePending = false; applyTransform(); });
+}
+
+// 以视口内某点为锚点缩放：该点下的内容保持不动
+function zoomTo(z, ax, ay) {
+  z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+  const cx = (ax - S.tx) / S.zoom, cy = (ay - S.ty) / S.zoom;
+  S.zoom = z;
+  S.tx = ax - cx * z;
+  S.ty = ay - cy * z;
+  applyTransform();
 }
 
 let gesture = null;
@@ -208,16 +243,23 @@ function initGestures() {
   const v = el.viewer;
   v.addEventListener('pointerdown', (e) => {
     v.setPointerCapture(e.pointerId);
-    if (!gesture) gesture = { pointers: new Map(), startDist: 0, startZoom: 1, last: null, moved: false, startTx: 0, startTy: 0 };
+    if (!gesture) gesture = { pointers: new Map(), pinch: null, last: null, moved: false, startTx: 0, startTy: 0 };
     gesture.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (gesture.pointers.size === 1) {
       gesture.last = { x: e.clientX, y: e.clientY };
       gesture.startTx = S.tx; gesture.startTy = S.ty; gesture.moved = false;
       gesture.downAt = Date.now();
     } else if (gesture.pointers.size === 2) {
+      // 双指进入：定格捏合基准（中点、双指距离、当前变换），此后完全靠 CSS 缩放
       const [a, b] = [...gesture.pointers.values()];
-      gesture.startDist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
-      gesture.startZoom = S.zoom;
+      const r = v.getBoundingClientRect();
+      gesture.pinch = {
+        d0: Math.hypot(a.x - b.x, a.y - b.y) || 1,
+        k0: S.zoom,
+        t0: { x: S.tx, y: S.ty },
+        mid0: { x: (a.x + b.x) / 2 - r.left, y: (a.y + b.y) / 2 - r.top },
+      };
+      gesture.moved = true;
     }
   });
   v.addEventListener('pointermove', (e) => {
@@ -228,13 +270,22 @@ function initGestures() {
       if (Math.abs(dx) + Math.abs(dy) > 2) gesture.moved = true;
       S.tx += dx; S.ty += dy;
       gesture.last = { x: e.clientX, y: e.clientY };
-      applyTransform();
+      scheduleFrame();
     } else if (gesture.pointers.size === 2) {
       const [a, b] = [...gesture.pointers.values()];
+      const g = gesture.pinch;
+      if (!g) return;
       const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
-      const z = Math.min(6, Math.max(0.6, gesture.startZoom * (dist / gesture.startDist)));
-      if (Math.abs(z - S.zoom) > 0.02) { S.zoom = z; scheduleZoomRender(); }
+      const r = v.getBoundingClientRect();
+      const mid = { x: (a.x + b.x) / 2 - r.left, y: (a.y + b.y) / 2 - r.top };
+      const z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, g.k0 * (dist / g.d0)));
+      // 基准中点下的那块内容，必须始终停在（跟着手指移动的）中点下 → 锚点缩放 + 双指平移
+      const cx = (g.mid0.x - g.t0.x) / g.k0, cy = (g.mid0.y - g.t0.y) / g.k0;
+      S.zoom = z;
+      S.tx = mid.x - cx * z;
+      S.ty = mid.y - cy * z;
       gesture.moved = true;
+      scheduleFrame();
     }
   });
   const end = (e) => {
@@ -243,19 +294,27 @@ function initGestures() {
     if (gesture.pointers.size === 0) {
       const quick = Date.now() - (gesture.downAt || 0) < 260 && !gesture.moved;
       gesture = null;
+      // 松手后不做任何重渲染：没有 300-800ms 等待、没有尺寸跳变（「跟手」的另一半）
       if (quick) onTap(e);
     } else if (gesture.pointers.size === 1) {
+      // 双指变单指：退出捏合态，剩下的那根手指接着拖动
+      gesture.pinch = null;
       gesture.last = [...gesture.pointers.values()][0];
+      gesture.startTx = S.tx; gesture.startTy = S.ty;
     }
   };
   v.addEventListener('pointerup', end);
   v.addEventListener('pointercancel', end);
   v.addEventListener('wheel', (e) => {
     e.preventDefault();
-    const z = Math.min(6, Math.max(0.6, S.zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
-    S.zoom = z; scheduleZoomRender();
+    const r = v.getBoundingClientRect();
+    zoomTo(S.zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12), e.clientX - r.left, e.clientY - r.top);
   }, { passive: false });
-  v.addEventListener('dblclick', () => { S.zoom = S.zoom > 1.6 ? 1 : 2.4; scheduleZoomRender(); });
+  // 双击：锚定点击位置切换两档（原先只改 zoom，缩放中心会漂）
+  v.addEventListener('dblclick', (e) => {
+    const r = v.getBoundingClientRect();
+    zoomTo(S.zoom > 1.6 ? 1 : 2.4, e.clientX - r.left, e.clientY - r.top);
+  });
   // 左右滑动翻页（未放大时）
   let swipeX = null;
   v.addEventListener('touchstart', (e) => { if (S.zoom <= 1.02 && S.viewMode === 'page' && e.touches.length === 1) swipeX = e.touches[0].clientX; }, { passive: true });
@@ -281,21 +340,18 @@ function onTap(e) {
   void x; void y;
 }
 
-let zoomTimer = null;
-function scheduleZoomRender() {
-  applyTransform();
-  clearTimeout(zoomTimer);
-  zoomTimer = setTimeout(() => {
-    // 重新以新 zoom 渲染（保持阅读清晰度），并尽量保持视口中心
-    const vw = el.viewer.clientWidth, vh = el.viewer.clientHeight;
-    const cx = (vw / 2 - S.tx) / (el.canvas.clientWidth || 1);
-    const cy = (vh / 2 - S.ty) / (el.canvas.clientHeight || 1);
-    renderPage(S.page).then(() => {
-      S.tx = vw / 2 - cx * el.canvas.clientWidth;
-      S.ty = vh / 2 - cy * el.canvas.clientHeight;
-      applyTransform();
-    });
-  }, 220);
+// 需要新位图的只剩三种情况：翻页、切视图模式、屏宽变化。
+// 缩放已经不在其中（S.zoom 走 CSS transform），所以这里只保留「渲染后保持视口中心」。
+function rerenderKeepingCenter() {
+  const vw = el.viewer.clientWidth, vh = el.viewer.clientHeight;
+  const z = S.zoom;
+  const cx = (vw / 2 - S.tx) / (el.canvas.clientWidth * z || 1);
+  const cy = (vh / 2 - S.ty) / (el.canvas.clientHeight * z || 1);
+  return renderPage(S.page).then(() => {
+    S.tx = vw / 2 - cx * el.canvas.clientWidth * z;
+    S.ty = vh / 2 - cy * el.canvas.clientHeight * z;
+    applyTransform();
+  });
 }
 
 function go(n) {
@@ -896,8 +952,11 @@ async function checkCache() {
 }
 
 /* ============================ 用户数据：生词本 / 搜索历史 ============================ */
-// 数据量小（历史 ≤ 30 条、生词本通常几百条），localStorage 足够，无需 IndexedDB
+// 数据量小（历史 ≤ 300 条、生词本通常几百条），localStorage 足够，无需 IndexedDB。
+// 300 条历史约 18KB，离 5MB 配额很远，上限只是防止无限增长。
 const LS_KEY = "ahdict.user.v1";
+const HISTORY_MAX = 300;
+const HISTORY_Q_MAX = 120;   // 单条查询长度上限，防止异常长文本撑爆存储
 
 function loadUser() {
   try {
@@ -945,11 +1004,11 @@ function scheduleHistory(q, n) {
 }
 
 function pushHistory(q) {
-  q = (q || "").trim();
+  q = (q || "").trim().slice(0, HISTORY_Q_MAX);
   if (!q) return;
   S.history = S.history.filter((h) => h.q !== q);
   S.history.unshift({ q, at: Date.now() });
-  if (S.history.length > 30) S.history = S.history.slice(0, 30);
+  if (S.history.length > HISTORY_MAX) S.history.length = HISTORY_MAX;
   saveUser();
   updateCounts();
   if (S.tab === "history") renderHistory();
@@ -960,7 +1019,7 @@ function renderHistory() {
   if (!box) return;
   box.innerHTML = "";
   if (!S.history.length) {
-    box.innerHTML = "<div class=\"res-item\"><div class=\"muted\">还没有搜索记录。搜索后按回车即会记下（最多保留 30 条）。</div></div>";
+    box.innerHTML = "<div class=\"res-item\"><div class=\"muted\">还没有搜索记录。搜到结果后会自动记下（最多保留 " + HISTORY_MAX + " 条）。</div></div>";
     return;
   }
   const frag = document.createDocumentFragment();
@@ -1192,8 +1251,9 @@ function bind() {
   $('btn-prev').addEventListener('click', () => go(S.page - 1));
   $('btn-next').addEventListener('click', () => go(S.page + 1));
   el.pageInput.addEventListener('change', () => go(parseInt(el.pageInput.value, 10) || 1));
-  $('btn-zoom-in').addEventListener('click', () => { S.zoom = Math.min(6, S.zoom * 1.35); scheduleZoomRender(); });
-  $('btn-zoom-out').addEventListener('click', () => { S.zoom = Math.max(0.6, S.zoom / 1.35); scheduleZoomRender(); });
+  // 按钮以视口中心为锚点缩放（手指够不到的地方交给捏合与双击）
+  $('btn-zoom-in').addEventListener('click', () => zoomTo(S.zoom * 1.35, el.viewer.clientWidth / 2, el.viewer.clientHeight / 2));
+  $('btn-zoom-out').addEventListener('click', () => zoomTo(S.zoom / 1.35, el.viewer.clientWidth / 2, el.viewer.clientHeight / 2));
   $('btn-view').addEventListener('click', () => setViewMode(S.viewMode === 'column' ? 'page' : 'column'));
   $('btn-cache-pdf').addEventListener('click', cachePdf);
   $('btn-open-file').addEventListener('click', () => el.fileInput.click());
@@ -1233,7 +1293,7 @@ function bind() {
     if (w === vpW) { applyTransform(); return; }   // 仅高度变化 → 只重算平移
     vpW = w;
     clearTimeout(vpResizeTimer);
-    vpResizeTimer = setTimeout(() => { applyTransform(); scheduleZoomRender(); }, 300);
+    vpResizeTimer = setTimeout(() => { applyTransform(); rerenderKeepingCenter(); }, 300);
   }
   window.addEventListener('resize', onViewportResize);
   window.addEventListener('orientationchange', () => setTimeout(onViewportResize, 350));
