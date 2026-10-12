@@ -10,20 +10,25 @@
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="apple-touch-icon" href="./icons/icon-192.png">
 <title>新编阿汉大词典</title>
-<link rel="stylesheet" href="./styles.css?v=6">
+<!-- v7 = VariantC 适老化四宫格（大标题 + 大搜索框 + 6 列大键盘 + 底部四枚大按钮）
+         同时包含自动离线缓存与 normVer=2 词形检索。改代码必须同时升 ?v= 与应用名。 -->
+<link rel="stylesheet" href="./styles.css?v=7">
 </head>
 <body>
 
+<!-- VariantC：大标题 + 大搜索框（点击才弹键盘，首屏不弹任何键盘） -->
 <header id="topbar">
-  <button id="btn-menu" class="icon-btn" title="词根目录" aria-label="词根目录">☰</button>
+  <h1 id="app-title">新编阿汉大词典</h1>
   <div class="search-wrap">
-    <input id="search" type="search" autocomplete="off" autocorrect="off" spellcheck="false"
-           placeholder="输入阿拉伯语词 / 中文释义…" aria-label="搜索">
-    <button id="btn-arkb" class="kb-btn" title="阿拉伯语键盘" aria-label="阿拉伯语键盘">ع</button>
+    <input id="search" type="search" readonly autocomplete="off" autocorrect="off" spellcheck="false"
+           enterkeyhint="search" placeholder="点这里查词：阿拉伯语 / 中文" aria-label="搜索">
+    <button id="btn-arkb" class="kb-btn" title="阿拉伯语大键盘" aria-label="阿拉伯语大键盘">ع</button>
     <button id="btn-clear" class="clear-btn" hidden aria-label="清除">✕</button>
   </div>
-  <button id="btn-more" class="icon-btn" title="设置" aria-label="设置">⋯</button>
 </header>
+
+<!-- 离线缓存状态条：首次打开自动缓存时显示「以后不用联网」 -->
+<div id="offline-banner" class="offline-banner" hidden></div>
 
 <div id="status" class="status" hidden></div>
 
@@ -34,16 +39,23 @@
   </div>
 </main>
 
+<!-- VariantC：底部四枚大按钮（上一页 / 目录 / 下一页 / 设置）+ 细工具条 -->
 <footer id="bottombar">
-  <button id="btn-prev" class="nav-btn" aria-label="上一页">‹</button>
-  <div class="page-box">
-    <input id="page-input" type="number" inputmode="numeric" min="1" aria-label="页码">
-    <span id="page-total">/ 2372</span>
+  <div id="bigrow">
+    <button id="btn-prev" class="big-btn" aria-label="上一页"><i class="bi">‹</i><span class="bt">上一页</span></button>
+    <button id="btn-menu" class="big-btn" title="词根目录 / 生词本 / 历史" aria-label="目录"><i class="bi">☰</i><span class="bt">目录</span></button>
+    <button id="btn-next" class="big-btn" aria-label="下一页"><i class="bi">›</i><span class="bt">下一页</span></button>
+    <button id="btn-more" class="big-btn" title="设置与离线缓存" aria-label="设置"><i class="bi">⋯</i><span class="bt">设置</span></button>
   </div>
-  <button id="btn-next" class="nav-btn" aria-label="下一页">›</button>
-  <button id="btn-view" class="nav-btn small" aria-label="切换视图" title="整页 / 单栏">▯</button>
-  <button id="btn-zoom-out" class="nav-btn small" aria-label="缩小">−</button>
-  <button id="btn-zoom-in" class="nav-btn small" aria-label="放大">＋</button>
+  <div id="toolrow">
+    <button id="btn-view" class="nav-btn small" aria-label="切换视图" title="整页 / 单栏">▯</button>
+    <button id="btn-zoom-out" class="nav-btn small" aria-label="缩小">−</button>
+    <button id="btn-zoom-in" class="nav-btn small" aria-label="放大">＋</button>
+    <div class="page-box">
+      <input id="page-input" type="number" inputmode="numeric" min="1" aria-label="页码">
+      <span id="page-total">/ 2372</span>
+    </div>
+  </div>
 </footer>
 
 <!-- 搜索结果面板 -->
@@ -86,10 +98,10 @@
 </aside>
 <div id="scrim" hidden></div>
 
-<!-- 阿拉伯语软键盘（点搜索框旁的 ع 打开）-->
+<!-- 阿拉伯语大键盘（VariantC：字母表顺序 · 6 列大键；点搜索框或点 ع 打开）-->
 <div id="arkb" hidden>
   <div class="arkb-head">
-    <span>阿拉伯语键盘</span>
+    <span>阿拉伯语键盘（字母表顺序）</span>
     <span class="muted">点字母即插入搜索框</span>
     <button id="btn-close-arkb" class="icon-btn" aria-label="关闭">✕</button>
   </div>
@@ -112,7 +124,7 @@
       <input id="opt-hl" type="checkbox" checked>
     </div>
     <div class="row">
-      <label for="opt-cache">离线缓存整本 PDF</label>
+      <label for="opt-cache">离线缓存整本 PDF（首次打开自动进行）</label>
       <button id="btn-cache-pdf" class="btn">开始缓存</button>
     </div>
     <div class="row col">
@@ -131,6 +143,6 @@
   </div>
 </section>
 
-<script type="module" src="./app.js?v=6"></script>
+<script type="module" src="./app.js?v=7"></script>
 </body>
 </html>
