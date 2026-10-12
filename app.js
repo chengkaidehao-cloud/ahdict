@@ -517,25 +517,32 @@ async function loadIndex() {
   loadPagesIndex();
 }
 
-async function loadPagesIndex() {
-  try {
-    const t0 = performance.now();
-    const r = await fetch('./data/pages.json');
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const j = await r.json();
-    S.index.pages = j.pages || [];
-    const secs = ((performance.now() - t0) / 1000).toFixed(1);
-    el.engineStatus.textContent = `索引就绪 · ${S.index.roots.length} 词根 / ${S.index.pages.length} 页文本`;
-    S.pagesReady = true;
-    toast(`中文检索索引已就绪（${S.index.pages.length} 页 · ${secs}s）`, 1800);
-  } catch (e) {
-    console.warn('页文本索引加载失败', e);
-    toast('中文索引加载失败，阿语检索仍可用');
-  }
+function loadPagesIndex() {
+  // pages.json（14MB）与 ar-index.json（4.9MB）**并行**拉。
+  // 串行时阿语词形检索要等中文索引下载完才可用 —— 实测在公网上首屏之后还要等不少时间，
+  // 而这段时间里搜基础阿语词只能拿到词根页，看起来就像是「词形检索又坏了」。
+  const pagesJob = (async () => {
+    try {
+      const t0 = performance.now();
+      const r = await fetch('./data/pages.json');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const j = await r.json();
+      S.index.pages = j.pages || [];
+      const secs = ((performance.now() - t0) / 1000).toFixed(1);
+      el.engineStatus.textContent = `索引就绪 · ${S.index.roots.length} 词根 / ${S.index.pages.length} 页文本`;
+      S.pagesReady = true;
+      toast(`中文检索索引已就绪（${S.index.pages.length} 页 · ${secs}s）`, 1800);
+    } catch (e) {
+      console.warn('页文本索引加载失败', e);
+      toast('中文索引加载失败，阿语检索仍可用');
+    }
+  })();
+
   // 阿语 OCR 词形索引（后台加载，用于「该词形出现在哪些页」）
-  try {
-    const r = await fetch('./data/ar-index.json');
-    if (r.ok) {
+  const arJob = (async () => {
+    try {
+      const r = await fetch('./data/ar-index.json');
+      if (!r.ok) return;
       const j = await r.json();
       if (j.normVer !== NORM_VER) {
         // 口径不符会「静默查不到」—— 最危险的一类故障，必须显式暴露
@@ -547,8 +554,10 @@ async function loadPagesIndex() {
         S.arLookup = null;                       // 换了索引就丢掉旧查找表
         console.log('阿语词形索引:', S.arIndex.length, '页 · normVer', j.normVer, '· srcStamp', j.srcStamp);
       }
-    }
-  } catch (e) { console.warn('阿语索引加载失败', e); }
+    } catch (e) { console.warn('阿语索引加载失败', e); }
+  })();
+
+  return Promise.allSettled([pagesJob, arJob]);
 }
 
 /* ---- 词形索引查找表 ----
@@ -719,7 +728,10 @@ function runSearch() {
   const cnReady = (S.index.pages || []).length > 0;
   if (hasArabic(q)) {
     items = searchArabic(q);
-    title = `阿拉伯语「${q}」· ${items.length} 条词根`;
+    // 词形索引加载完之前先说实话，否则用户会以为「这些词就是查不到」
+    const arIdxReady = !!(S.arIndex && S.arIndex.length);
+    title = `阿拉伯语「${q}」· ${items.length} 条结果` + (arIdxReady ? '' : '（词形索引加载中，当前仅词根）');
+    if (!arIdxReady && !runSearch._arWarned) { runSearch._arWarned = true; toast('阿语词形索引仍在后台加载（首次打开约需十几秒），稍后再试', 3000); }
     if (!items.length && hasCJK(q)) { items = searchChinese(q); title = `中文「${q}」· ${items.length} 页`; }
   } else if (hasCJK(q)) {
     if (!cnReady) toast('中文检索索引仍在后台加载，请稍候几秒…', 2600);
