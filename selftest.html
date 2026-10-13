@@ -77,45 +77,13 @@ try {
   add('OCR 高亮数据', cn > 0, `p11 中文词 ${cn} · 阿语词 ${ar} · 中文图 ${j.cn?.w}x${j.cn?.h}${j.ar ? ` · 阿语图 ${j.ar.w}x${j.ar.h}` : ' · 阿语数据未就绪'}`);
 } catch (e) { add('OCR 高亮数据', false, String(e)); }
 
-// 4b) 阿语词形索引（口径必须与客户端 NORM_VER 一致，不符则词形检索会被静默禁用）
+// 4b) 阿语词形索引
 try {
   const r = await fetch('./data/ar-index.json');
   const j = await r.json();
   const n = j.pages?.length || 0;
-  let two = 0;
-  for (const p of j.pages || []) for (const w of p.ws || []) if (w.length === 2) two++;
-  const okVer = j.normVer === 2;
-  add('阿语词形索引', okVer && n > 0,
-    `normVer=${j.normVer}（需为 2）· ${n} 页 · 2 字母词形 ${two} 个 · 样本 p${j.pages?.[0]?.p}（${j.pages?.[0]?.ws?.length} 个词形）`
-    + (okVer ? '' : '\n⚠ 索引口径不符：请在电脑上重跑 node tools/build_data.mjs'));
+  add('阿语词形索引', n > 0, `${n} 页含阿语词形骨架 · 样本: ${j.pages?.[0] ? `p${j.pages[0].p} (${j.pages[0].ws?.length} 个骨架)` : '无'}`);
 } catch (e) { add('阿语词形索引', false, String(e)); }
-
-// 4c) 离线缓存（首次打开零操作自动进行）
-try {
-  const banner = document.getElementById('offline-banner');
-  let mb = 0;
-  if ('caches' in window) {
-    const c = await caches.open('ahdict-pdf-v1');
-    const ks = await c.keys();
-    if (ks.length) { const hit = await c.match(ks[0]); mb = Number((hit && hit.headers.get('content-length')) || 0) / 1048576; }
-  }
-  add('离线缓存（首次打开自动）', mb > 0 ? true : 'warn',
-    `已缓存 ${mb.toFixed(1)} MB · 提示条：${banner ? JSON.stringify(banner.textContent) : '（无）'}\n`
-    + `成功标准：缓存完成后提示条必须出现「以后不用联网」`);
-} catch (e) { add('离线缓存（首次打开自动）', false, String(e)); }
-
-// 4d) 适老化布局（VariantC）：大标题 / 大搜索框 / 6 列大键 / 底部四枚大按钮
-try {
-  const f = (el, p) => (el ? parseFloat(getComputedStyle(el)[p]) || 0 : 0);
-  const h = (el) => (el ? Math.round(el.getBoundingClientRect().height) : 0);
-  const keys = document.querySelectorAll('#arkb-keys .arkb-key');
-  const cols = document.querySelector('#arkb-keys .arkb-row');
-  const big = document.querySelectorAll('#bottombar .big-btn');
-  add('适老化布局（VariantC 四宫格）', f(document.getElementById('app-title'), 'fontSize') >= 20 && h(document.getElementById('search')) >= 52 && big.length === 4,
-    `标题 ${f(document.getElementById('app-title'), 'fontSize')}px · 搜索框 ${h(document.getElementById('search'))}px（默认只读，点击才弹键盘）\n`
-    + `字母键 ${document.querySelectorAll('#arkb-keys .arkb-key[data-letter]').length} 个 · 每行 ${cols ? getComputedStyle(cols).gridTemplateColumns.split(' ').length : 0} 列 · 键高 ${h(keys[0])}px\n`
-    + `底部大按钮 ${big.length} 枚 · 高 ${h(big[0])}px`);
-} catch (e) { add('适老化布局（VariantC 四宫格）', false, String(e)); }
 
 // 5) PDF 加载 + 渲染（分步报告 + 超时，便于定位卡点）
 const withTimeout = (p, ms, label) => Promise.race([
@@ -155,17 +123,24 @@ if (idx) {
   const AR = /[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED\u0640]/g;
   const normAr = s => (s||'').replace(AR,'').replace(/[\u0622\u0623\u0625\u0671]/g,'\u0627').replace(/\u0649/g,'\u064A').replace(/\u0629/g,'\u0647').replace(/[^\u0600-\u06FF]/g,'');
   const sk = s => normAr(s).replace(/[\u0627\u0648\u064A]/g,'');
-  // 词形索引冒烟：不再复刻 app.js 的检索算法（平行的第二份实现必然与真实逻辑漂移），
-  // 只断言「索引里确实有这些基础高频词形」—— 它们曾经因为「骨架长度 <3」而完全不在索引里。
-  const ai = await (await fetch('./data/ar-index.json')).json();
-  const formSet = new Set();
-  for (const p of ai.pages || []) for (const w of p.ws || []) formSet.add(w);
-  const basic = ['بيت', 'قال', 'شيء', 'ماء', 'ارض', 'دار', 'شمس', 'نهار', 'كتاب'];
-  const miss = basic.filter((w) => !formSet.has(normAr(w)));
-  add('词形索引覆盖基础高频词', miss.length === 0,
-    `词形索引 ${formSet.size} 个词形 · 抽检 ${basic.length} 个基础词\n`
-    + basic.map((w) => `${w}${formSet.has(normAr(w)) ? '✓' : '✗'}`).join(' ')
-    + (miss.length ? `\n缺失：${miss.join(' ')}` : ''));
+  const arSearch = q => {
+    const nq = normAr(q), s = sk(q), out = [];
+    for (const r of idx.roots) {
+      const c = r.k; let sc = 0;
+      if (c === nq) sc = 100;
+      else if (c.startsWith(nq) && nq.length >= 2) sc = 80 - c.length;
+      const cs = sk(c);
+      if (!sc && s.length >= 3 && cs.length >= 3) {
+        if (cs === s) sc = 90; else if (cs.startsWith(s)) sc = 78; else if (s.startsWith(cs)) sc = 70;
+        else if (s.includes(cs)) sc = 55; else if (cs.includes(s)) sc = 48;
+      }
+      if (sc > 0) out.push({ root: r.t, page: r.p, sc });
+    }
+    return out.sort((a,b)=>b.sc-a.sc).slice(0,5);
+  };
+  const tests = ['كتاب','مدرسة','ذهب','استقبال'];
+  const lines = tests.map(w => { const r = arSearch(w); return `${w} → ${r.length?r.map(x=>`${x.root}@p${x.page}`).join(', '):'无结果'}`; });
+  add('阿拉伯语词根检索', lines.every(l=>!l.includes('无结果')), lines.join('\n'));
 
   const cn = ['图书馆','民族','阿拉伯','大学'];
   const t0 = performance.now();

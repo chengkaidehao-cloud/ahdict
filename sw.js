@@ -1,11 +1,7 @@
 /* 新编阿汉大词典 · Service Worker：应用外壳离线 + 索引缓存 + PDF 可选缓存 */
 // 约定：任何改动本文件内容都必须提升 VER，否则 activate 不会清理旧外壳缓存。
-// v2 = 修复 PDF 缓存命中破坏 Range；v3 = 预缓存 roots.json；v4 = 离线 Range 流式切分；
-// v5 = 按响应语义切片（不再依赖 onLine）；
-// v6 = 词形级索引（ar-index 的 ws 由骨架改存词形、新增 normVer）：
-//      data/ 分支是 cache-first，同名换内容时用户首次打开仍会拿到旧索引，
-//      而旧索引 + 新客户端会因 normVer 不符而禁用词形检索 → 必须换缓存名。
-const VER = 'v6';
+// v2 = 修复 PDF 缓存命中破坏 Range；v3 = 预缓存 roots.json；v4 = 离线 Range 流式切分；v5 = 按响应语义切片（不再依赖 onLine）
+const VER = 'v7';
 const SHELL = `ahdict-shell-${VER}`;
 const DATA = `ahdict-data-${VER}`;
 const PDFC = 'ahdict-pdf-v1';
@@ -13,8 +9,7 @@ const PDFC = 'ahdict-pdf-v1';
 const SHELL_ASSETS = [
   './', './index.html', './styles.css', './app.js', './manifest.webmanifest',
   // 121KB，首屏词根检索必需：不预缓存的话，用户首次打开后立刻断网就查不了词根。
-  // pages.json（14MB）与 ar-index.json（3.5MB）故意不在此列 —— 它们走 data/ 分支按需 SWR 缓存。
-  // 整本 PDF（85MB）也不在这里：它由 app.js 的「首次打开零操作自动缓存」按需下载，
+  // pages.json（14MB）与 ar-index.json（2.78MB）故意不在此列 —— 它们走 data/ 分支按需 SWR 缓存。
   './data/roots.json',
   './vendor/pdf.mjs', './vendor/pdf.worker.mjs',
   './vendor/wasm/jbig2.wasm', './vendor/wasm/jbig2_nowasm_fallback.js',

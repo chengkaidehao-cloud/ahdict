@@ -24,8 +24,7 @@ const S = {
   objectUrl: null,      // 本地文件模式
   viewMode: 'column',   // 'column' 单栏阅读（默认，字大清晰）| 'page' 整页
   pagesReady: false,
-  arIndex: null,        // 阿语 OCR 词形索引（页 → 归一化词形）
-  arLookup: null,       // 词形索引的查找表（首次阿语检索时懒构建，见 buildArLookup）
+  arIndex: null,        // 阿语 OCR 词形索引
   words: [],            // 生词本 [{ key, q, page, root, at }]
   history: [],          // 搜索历史 [{ q, at }]
   tab: 'tree',           // 抽屉当前 tab：tree | words | history
@@ -90,55 +89,6 @@ function skeleton(s) { return normAr(s).replace(/[\u0627\u0648\u064A]/g, ''); }
 
 // 词根字符串 "أ-ب-ب" → 紧凑 "أبب"
 function rootCompact(t) { return normAr((t || '').replace(/[-\s\u2010-\u2015]/g, '')); }
-
-/* ---- 词形级检索的公共口径 ----------------------------------------
-   索引里存的是「归一化词形」（tools/build_data.mjs 构建）。
-   客户端改了 normAr 却忘了重建索引 → 两边静默错配，表现是「突然什么都查不到」。
-   normVer 就是防这件事的：不符就禁用词形检索并提示重建，而不是悄悄地查不到。 */
-const NORM_VER = 2;
-
-// 附着词（clitic）：阿语把定冠词、连词、代词后缀直接粘在词上，
-// 所以 كتاب / الكتاب / وكتاب / كتابه 是同一个词形。第二层就是把它们剥掉再比。
-// 保守策略（实测教训）：
-//   · 单字母前缀只剥 و / ف。先前试过把 ب ك ل س 也算前缀，结果 stripAffixes('كتاب')
-//     = 'تاب'（把 ك 当成了「像……」那个前缀）—— كتاب / الكتاب / كتابه 全部
-//     归到 تاب 名下，这是拿真实词根当附着词剥。و/ف 几乎不会是词根首字母，代价小。
-//   · 剥完必须剩 ≥3 个字母，否则不剥（ال + ان → 「现在 الان」不能被剥成 ان）。
-const AR_DEF = /^(?:وال|فال|بال|كال|لال|ال)/;   // 定冠词（含 连词/介词 + ال 的组合）
-const AR_CONJ = /^[وف]/;                         // 只剥连词 و / ف
-const AR_SUFFIXES = ['هما', 'هم', 'هن', 'كما', 'كم', 'كن', 'ها', 'نا', 'ان', 'ات', 'ون', 'ين', 'يه', 'ه', 'ك', 'ي', 'ت', 'ا'];
-function stripAffixes(s) {
-  let w = s;
-  const d = AR_DEF.exec(w);
-  if (d && w.length - d[0].length >= 3) w = w.slice(d[0].length);
-  else if (AR_CONJ.test(w) && w.length - 1 >= 3) w = w.slice(1);
-  for (const sfx of AR_SUFFIXES) {            // 后缀最多剥一层（长后缀优先，数组已按长→短排）
-    if (w.length - sfx.length >= 3 && w.endsWith(sfx)) { w = w.slice(0, -sfx.length); break; }
-  }
-  return w;
-}
-
-// 第四层「模糊」的判据：只判 一次替换 / 一次增删（不做完整 DP）。
-// 代价受控的前提是候选池按「首字母 + 长度」分桶（见 buildArLookup）；
-// 拿全库 10 万词形逐一带 DP，每次按键要多出几十毫秒。
-function nearMiss(a, b) {
-  if (a === b) return false;                       // 相等属于第①层，不在这里重复
-  const la = a.length, lb = b.length;
-  if (Math.abs(la - lb) > 1) return false;
-  if (la === lb) {
-    let d = 0;
-    for (let i = 0; i < la; i++) if (a[i] !== b[i] && ++d > 1) return false;
-    return true;
-  }
-  const s = la < lb ? a : b, l = la < lb ? b : a;   // 短的必须是长的删一个字符
-  let i = 0, j = 0, skip = 0;
-  while (i < s.length && j < l.length) {
-    if (s[i] === l[j]) { i++; j++; continue; }
-    if (++skip > 1) return false;
-    j++;
-  }
-  return true;
-}
 
 /* ============================ PDF 加载与渲染 ============================ */
 async function loadDoc(url) {
@@ -443,6 +393,7 @@ async function drawHighlights() {
   const src = isAr ? pg.ar : pg.cn;
   if (!src || !src.w) return;
   const nq = isAr ? normAr(q) : q;
+  const sk = isAr ? skeleton(q) : '';
   const qc = q.replace(/\s+/g, '');
   const cssW = el.canvas.width / (S.pageDpr || 1);
   const ratio = cssW / src.w;
@@ -458,14 +409,7 @@ async function drawHighlights() {
   };
   const matches = (t) => {
     if (!t) return false;
-    // 词形级：把「子串包含」改成「词形相等」（含剥离附着词后的相等）。
-    // normAr 已经剥掉标点与变音符，所以相等比包含更准：
-    // 旧版会把 نهارك（“你的白天”）这类同根不同词一起画上。
-    if (isAr) {
-      const nt = normAr(t);
-      if (!nt) return false;
-      return nt === nq || stripAffixes(nt) === stripAffixes(nq);
-    }
+    if (isAr) return normAr(t).includes(nq) || (sk.length >= 3 && skeleton(t).includes(sk));
     return t.includes(q) || (qc.length >= 2 && t.replace(/\s+/g, '').includes(qc));
   };
   // 1) 词级
@@ -517,81 +461,30 @@ async function loadIndex() {
   loadPagesIndex();
 }
 
-function loadPagesIndex() {
-  // pages.json（14MB）与 ar-index.json（4.9MB）**并行**拉。
-  // 串行时阿语词形检索要等中文索引下载完才可用 —— 实测在公网上首屏之后还要等不少时间，
-  // 而这段时间里搜基础阿语词只能拿到词根页，看起来就像是「词形检索又坏了」。
-  const pagesJob = (async () => {
-    try {
-      const t0 = performance.now();
-      const r = await fetch('./data/pages.json');
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      const j = await r.json();
-      S.index.pages = j.pages || [];
-      const secs = ((performance.now() - t0) / 1000).toFixed(1);
-      el.engineStatus.textContent = `索引就绪 · ${S.index.roots.length} 词根 / ${S.index.pages.length} 页文本`;
-      S.pagesReady = true;
-      toast(`中文检索索引已就绪（${S.index.pages.length} 页 · ${secs}s）`, 1800);
-    } catch (e) {
-      console.warn('页文本索引加载失败', e);
-      toast('中文索引加载失败，阿语检索仍可用');
-    }
-  })();
-
+async function loadPagesIndex() {
+  try {
+    const t0 = performance.now();
+    const r = await fetch('./data/pages.json');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    S.index.pages = j.pages || [];
+    const secs = ((performance.now() - t0) / 1000).toFixed(1);
+    el.engineStatus.textContent = `索引就绪 · ${S.index.roots.length} 词根 / ${S.index.pages.length} 页文本`;
+    S.pagesReady = true;
+    toast(`中文检索索引已就绪（${S.index.pages.length} 页 · ${secs}s）`, 1800);
+  } catch (e) {
+    console.warn('页文本索引加载失败', e);
+    toast('中文索引加载失败，阿语检索仍可用');
+  }
   // 阿语 OCR 词形索引（后台加载，用于「该词形出现在哪些页」）
-  const arJob = (async () => {
-    try {
-      const r = await fetch('./data/ar-index.json');
-      if (!r.ok) return;
+  try {
+    const r = await fetch('./data/ar-index.json');
+    if (r.ok) {
       const j = await r.json();
-      if (j.normVer !== NORM_VER) {
-        // 口径不符会「静默查不到」—— 最危险的一类故障，必须显式暴露
-        console.warn(`ar-index.json 归一化口径不符（索引 ${j.normVer} / 客户端 ${NORM_VER}）→ 请重建索引`);
-        S.arIndex = null;
-        toast('阿语索引版本不符，词形检索已禁用（请在电脑上重跑 node tools/build_data.mjs）', 5000);
-      } else {
-        S.arIndex = j.pages || [];
-        S.arLookup = null;                       // 换了索引就丢掉旧查找表
-        console.log('阿语词形索引:', S.arIndex.length, '页 · normVer', j.normVer, '· srcStamp', j.srcStamp);
-      }
-    } catch (e) { console.warn('阿语索引加载失败', e); }
-  })();
-
-  return Promise.allSettled([pagesJob, arJob]);
-}
-
-/* ---- 词形索引查找表 ----
-   索引中约 10 万条词形 / 46 万条页-词形对。每次按键都扫一遍虽能跑，但
-   模糊层还要对候选做逐字比较，所以先一次性建三个表：
-     forms    词形 → 页码（第①层「词形精确」）
-     stripped 剥离附着词后的词形 → 页码（第②层）
-     buckets  前两字母+长度 → 词形列表（第④层候选池，把全库比较降为百量级）
-   懒构建（首次阿语检索才建），不占首屏时间。 */
-function buildArLookup() {
-  if (S.arLookup || !S.arIndex || !S.arIndex.length) return S.arLookup;
-  const forms = new Map();
-  const stripped = new Map();
-  const buckets = new Map();
-  const add = (m, k, p) => {
-    let a = m.get(k);
-    if (!a) m.set(k, (a = []));
-    if (a[a.length - 1] !== p) a.push(p);        // 页码天然升序，只防同页重复
-  };
-  for (const p of S.arIndex) {
-    for (const w of p.ws || []) {
-      add(forms, w, p.p);
-      const st = stripAffixes(w);
-      if (st !== w) add(stripped, st, p.p);
+      S.arIndex = j.pages || [];
+      console.log('阿语词形索引:', S.arIndex.length, '页');
     }
-  }
-  for (const w of forms.keys()) {
-    const k = w.slice(0, 2) + '|' + w.length;
-    let c = buckets.get(k);
-    if (!c) buckets.set(k, (c = []));
-    c.push(w);
-  }
-  S.arLookup = { forms, stripped, buckets };
-  return S.arLookup;
+  } catch (e) { console.warn('阿语索引加载失败', e); }
 }
 
 function snippet(text, at, len) {
@@ -612,10 +505,6 @@ function searchArabic(q) {
     seen.add(key);
     out.push({ type: 'ar', page: r.p, root: r.t, kind, score, snippet: '' });
   };
-
-  /* ===== 第③层 · 词根骨架（词根表两段匹配，原样保留）=====
-     这一层回答的是「变形词怎么办」：يكتب（他写）字面不在词根表里，
-     但骨架 ك-ت-ب 在 —— 这也是词形检索不能直接取代词根表的原因。 */
   for (const r of roots) {
     const c = r.k;                       // 紧凑词根
     if (c === nq) push(r, '精确', 100);
@@ -636,58 +525,25 @@ function searchArabic(q) {
       if (score > 0) push(r, '词根', score);
     }
   }
-
-  /* ===== 词形索引三层（①②④）=====
-     顺序即优先级：精确 → 剥离附着词 → 模糊。
-     旧版这里是基于「骨架」的 w===sk / w.includes(sk)，而索引已改存词形，
-     骨架包含式匹配会把 نهر（河流）当成 نهار（白天）召回（实测 85 页里 65 页是错的），
-     因此该桶整个删除 —— 词形信息比骨架更完整，变形词由上方的词根表兜底。 */
-  const B = buildArLookup();
-  if (B) {
-    const pagesIn = new Set(out.map((x) => x.page));   // 词根表已给的页不重复
-    const qs = stripAffixes(nq);
-
-    // ① 词形精确
-    const exact = new Set((B.forms.get(nq) || []).filter((p) => !pagesIn.has(p)));
-
-    // ② 剥离附着词：定冠词/连词/介词前缀 + 代词/复数后缀
-    const clitic = new Set();
-    for (const p of B.forms.get(qs) || []) clitic.add(p);       // 索引里本来就是 qs
-    for (const p of B.stripped.get(qs) || []) clitic.add(p);    // 剥掉后才等于 qs
-    for (const p of pagesIn) clitic.delete(p);
-    for (const p of exact) clitic.delete(p);
-
-    // ④ 模糊：仅 ≥4 字母查询；只在「前两字母相同 + 长度差 ≤1」的桶里找。
-    //    两个取舍都是实测定的：
-    //      · 前两字母同为定：只按首字母会把 نجار/نزار/نشار 都算成 نهار 的「近形」，
-    //        加上第二个字母后只留真正可能看错的；
-    //      · 4 字母以下不做增删型模糊：3/4 字母词里差一个字母几乎总是另一个词
-    //        （نهر 河流 / نهار 白天 就属这种），只有 ≥5 字母时才认增删。
-    const fuzzy = new Set();
-    if (nq.length >= 4) {
-      const lens = nq.length >= 5 ? [nq.length - 1, nq.length, nq.length + 1] : [nq.length];
-      for (const len of lens) {
-        for (const w of B.buckets.get(nq.slice(0, 2) + '|' + len) || []) {
-          if (!nearMiss(w, nq)) continue;
-          for (const p of B.forms.get(w)) {
-            if (pagesIn.has(p) || exact.has(p) || clitic.has(p)) continue;
-            fuzzy.add(p);
-          }
-        }
+  // 阿语 OCR 词形索引：区分「精确词形」与「含该词根」，精确优先且部分匹配限量
+  if (sk.length >= 3 && S.arIndex && S.arIndex.length) {
+    const pagesIn = new Set(out.map((x) => x.page));
+    const exact = [], partial = [];
+    for (const p of S.arIndex) {
+      if (pagesIn.has(p.p)) continue;
+      let isExact = false, isPartial = false;
+      for (const w of p.ws) {
+        if (w === sk) { isExact = true; break; }
+        if (w.length >= 4 && w.includes(sk)) isPartial = true;
+        else if (sk.length >= 4 && sk.includes(w)) isPartial = true;
       }
+      if (isExact) exact.push(p.p);
+      else if (isPartial) partial.push(p.p);
     }
-    // 配额：短词（بيت 242 页 / ماء 916 页 / ارض 1127 页）没有配额会被单一桶塞满
-    const asc = (s) => [...s].sort((a, b) => a - b);
-    for (const pg of asc(exact).slice(0, 100)) out.push({ type: 'ar', page: pg, root: q, kind: '词形', score: 100, snippet: '' });
-    for (const pg of asc(clitic).slice(0, 60)) out.push({ type: 'ar', page: pg, root: q, kind: '附着词', score: 92, snippet: '' });
-    for (const pg of asc(fuzzy).slice(0, 30)) out.push({ type: 'ar', page: pg, root: q, kind: '模糊', score: 62, snippet: '' });
+    for (const pg of exact.slice(0, 60)) out.push({ type: 'ar', page: pg, root: q, kind: '词形', score: 52, snippet: '' });
+    for (const pg of partial.slice(0, 40)) out.push({ type: 'ar', page: pg, root: q, kind: '含词根', score: 22, snippet: '' });
   }
-  // 同分排序用稳定排序（不写第二排序键）：
-  // 词根表条目先入队、索引页后入队，而索引页内部已按页码升序，
-  // 所以「同分→先词根页、后文本页，各自按页码升序」是同一段代码达成的。
-  // 这一点是有意的：搜 ذهب 时应该先给词典的词根页（p694），
-  // 而不是正文里最早出现该词形的某一页（p14）。
-  return out.sort((a, b) => b.score - a.score).slice(0, 120);
+  return out.sort((a, b) => b.score - a.score || a.page - b.page).slice(0, 120);
 }
 
 // 紧凑索引位置 → 原文本位置（OCR 常在词内插入空格）
@@ -728,10 +584,7 @@ function runSearch() {
   const cnReady = (S.index.pages || []).length > 0;
   if (hasArabic(q)) {
     items = searchArabic(q);
-    // 词形索引加载完之前先说实话，否则用户会以为「这些词就是查不到」
-    const arIdxReady = !!(S.arIndex && S.arIndex.length);
-    title = `阿拉伯语「${q}」· ${items.length} 条结果` + (arIdxReady ? '' : '（词形索引加载中，当前仅词根）');
-    if (!arIdxReady && !runSearch._arWarned) { runSearch._arWarned = true; toast('阿语词形索引仍在后台加载（首次打开约需十几秒），稍后再试', 3000); }
+    title = `阿拉伯语「${q}」· ${items.length} 条词根`;
     if (!items.length && hasCJK(q)) { items = searchChinese(q); title = `中文「${q}」· ${items.length} 页`; }
   } else if (hasCJK(q)) {
     if (!cnReady) toast('中文检索索引仍在后台加载，请稍候几秒…', 2600);
@@ -992,69 +845,9 @@ async function registerSW() {
   try { await navigator.serviceWorker.register('./sw.js'); } catch (e) { console.warn('SW 注册失败', e); }
 }
 
-/* ---- 自动离线缓存（首次打开零操作）---------------------------------
-   目标：用户打开首页什么都不用点，整本 PDF（85 MB）自动落进 Cache Storage，
-         并且必须读到一句人话 ——「以后不用联网」。没有这句话，用户不知道
-         自己现在能不能断网用，下次开网页还是会先连 WiFi。
-   三条约束：
-     ① 不抢首屏：等首页渲染完 + 一段空闲再开跑（首屏卡顿比晚一秒缓存更糟）；
-     ② 不重复下：先查缓存，已缓存就只更新文案；
-     ③ 可退出：URL 带 ?autocache=0 时不自动缓存（测试与「我不想让它自己下」两种场景都要）。 */
-const PDF_CACHE = 'ahdict-pdf-v1';
-const AUTO_CACHE_DELAY = 1600;
-
-function autoCacheEnabled() {
-  if (/[?&]autocache=0/.test(location.search)) return false;
-  if (!window.isSecureContext) return false;      // HTTP 局域网：浏览器根本不允许
-  if (!('caches' in window)) return false;
-  return true;
-}
-
-// 页顶常驻提示条：缓存进度与「以后不用联网」就靠它传达
-function setBanner(text, tone) {
-  const b = $('offline-banner');
-  if (!b) return;
-  if (!text) { b.hidden = true; b.textContent = ''; return; }
-  b.textContent = text;
-  b.className = 'offline-banner' + (tone ? ' ' + tone : '');
-  b.hidden = false;
-}
-
-async function pdfCachedMB() {
-  try {
-    const c = await caches.open(PDF_CACHE);
-    const ks = await c.keys();
-    if (!ks.length) return 0;
-    const r = await c.match(ks[0]);
-    return (Number((r && r.headers.get('content-length')) || 0)) / 1048576;
-  } catch { return 0; }
-}
-
-// 统一的「已缓存」文案：无论自动还是手动，都必须出现「以后不用联网」
-function markCachedOffline(mb, persisted) {
-  const txt = '已缓存整本 PDF（' + mb.toFixed(1) + ' MB）· 以后不用联网'
-    + (persisted ? ' · 已申请持久化存储' : ' · 建议「添加到主屏幕」以防浏览器清理');
-  const cs = $('cache-status');
-  if (cs) cs.textContent = txt;
-  setBanner('✅ 已离线缓存全书 ' + mb.toFixed(1) + ' MB · 以后不用联网', 'done');
-}
-
-// 首屏渲染完后的空闲时刻调度（由 main() 调用）
-async function scheduleAutoCache() {
-  if (!autoCacheEnabled()) {
-    if (!window.isSecureContext) setBanner('当前 HTTP 访问：无法离线缓存（浏览器要求 HTTPS）—— 查词、阅读不受影响', 'warn');
-    return;
-  }
-  const mb = await pdfCachedMB();
-  if (mb > 80) { markCachedOffline(mb, false); return; }
-  setBanner('正在自动离线缓存全书（约 85 MB）… 缓存完成后，以后不用联网', 'busy');
-  await cachePdf(true);
-}
-
-async function cachePdf(auto) {
+async function cachePdf() {
   if (!window.isSecureContext) {
     toast('离线缓存需要 HTTPS 访问。当前是 HTTP 局域网地址，浏览器不允许缓存，详见「⋯ 设置」里的说明', 5000);
-    if (auto) setBanner('当前 HTTP 访问：无法离线缓存（浏览器要求 HTTPS）', 'warn');
     return;
   }
   if (!('caches' in window)) { toast('浏览器不支持缓存'); return; }
@@ -1084,8 +877,7 @@ async function cachePdf(auto) {
 
     setBtn('缓存中…', true);
     setStatus('正在缓存… 0%');
-    toast(auto ? '正在自动离线缓存全书（85 MB）…以后不用联网' : '开始缓存 PDF（85 MB），请保持页面打开', 4000);
-    if (auto) setBanner('正在自动离线缓存全书（约 85 MB）… 缓存完成后，以后不用联网', 'busy');
+    toast('开始缓存 PDF（85 MB），请保持页面打开', 4000);
 
     // ③ 流式下载 + 实时进度：用 ReadableStream 边读边转发，
     //    既能看到进度，又不会把 85MB 全读进 JS 内存。
@@ -1113,7 +905,7 @@ async function cachePdf(auto) {
       cancel() { try { src.cancel(); } catch { /* ignore */ } },
     });
 
-    const cache = await caches.open(PDF_CACHE);
+    const cache = await caches.open('ahdict-pdf-v1');
     await cache.put(PDF_URL, new Response(stream, {
       status: 200,
       headers: {
@@ -1129,13 +921,12 @@ async function cachePdf(auto) {
     const stored = hit ? Number(hit.headers.get('content-length') || 0) : 0;
     if (!stored || (total && stored !== total)) throw new Error('缓存校验失败（' + stored + ' / ' + total + '）');
 
-    markCachedOffline(stored / 1048576, persisted);
+    setStatus('已缓存整本 PDF（' + (stored / 1048576).toFixed(1) + ' MB）' + (persisted ? ' · 已申请持久化存储' : ' · 建议「添加到主屏幕」以防被浏览器清理'));
     setBtn('重新缓存', false);
-    toast('PDF 已缓存（' + (stored / 1048576).toFixed(0) + ' MB）· 以后不用联网', 4000);
+    toast('PDF 已缓存（' + (stored / 1048576).toFixed(0) + ' MB），断网也能查词', 4000);
   } catch (e) {
     setStatus('缓存失败：' + e.message);
     setBtn('重试缓存', false);
-    if (auto) setBanner('自动缓存失败：' + e.message + '（可在「设置 → 重新缓存」重试）', 'warn');
     toast('缓存失败：' + e.message + '（可点「重试缓存」）', 6000);
   }
 }
@@ -1155,12 +946,9 @@ async function checkCache() {
   if (btn) { btn.disabled = false; btn.textContent = '开始缓存'; }
   if (note) note.textContent = '当前为安全上下文，可离线缓存。';
   if (!('caches' in window)) return;
-  const cache = await caches.open(PDF_CACHE);
+  const cache = await caches.open('ahdict-pdf-v1');
   const k = await cache.keys();
-  if (!k.length) { el.cacheStatus.textContent = '未缓存（在线读取 PDF；首次打开会自动缓存）'; return; }
-  const hit = await cache.match(k[0]);
-  const mb = (Number((hit && hit.headers.get('content-length')) || 0)) / 1048576;
-  el.cacheStatus.textContent = '已缓存整本 PDF（' + mb.toFixed(1) + ' MB）· 以后不用联网';
+  el.cacheStatus.textContent = k.length ? '已缓存整本 PDF（离线可读）' : '未缓存（在线读取 PDF）';
 }
 
 /* ============================ 用户数据：生词本 / 搜索历史 ============================ */
@@ -1374,45 +1162,34 @@ function switchTab(name) {
   if (name === "history") renderHistory();
 }
 
-/* ---- 阿拉伯语大键盘（VariantC：字母表顺序 · 6 列大键）---- */
-// 手机系统键盘通常打不出阿拉伯语，这是手机端查词的主要障碍。
-// 适老化三个取舍：
-//   ① 字母按「字母表顺序」排（不是传统打字机布局）—— 老人查词是顺着字母表背的
-//      （ا ب ت ث …），传统布局只有熟练打字的人才会用；
-//   ② 每行 6 列、键高 56px：比原来的 11 列小键大 3 倍以上，手指按得准；
-//   ③ 功能键（空格 / ⌫ / 清空）单独一行，不与字母混在一起，避免误触。
-const AR_ALPHABET = ['ا', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', 'ف', 'ق', 'ك', 'ل', 'م', 'ن', 'ه', 'و', 'ي'];
-const AR_FUNCS = ['空格', '⌫', '清空'];
-const ARKB_COLS = 6;
+/* ---- 阿拉伯语软键盘 ---- */
+// 手机系统键盘通常打不出阿拉伯语，这是手机端查词的主要障碍
+const AR_ROWS = [
+  ["ض", "ص", "ث", "ق", "ف", "غ", "ع", "ه", "خ", "ح", "ج"],
+  ["ش", "س", "ي", "ب", "ل", "ا", "ت", "ن", "م", "ك", "ط"],
+  ["ئ", "ء", "ؤ", "ر", "ى", "ة", "و", "ز", "ظ", "ذ", "د"],
+  ["أ", "إ", "آ", "لا", "空格", "⌫", "清空"],
+];
 
 function renderArkb() {
   const box = $("arkb-keys");
   if (!box || box.dataset.built) return;
   const frag = document.createDocumentFragment();
-  for (let i = 0; i < AR_ALPHABET.length; i += ARKB_COLS) {
+  for (const row of AR_ROWS) {
     const r = document.createElement("div");
     r.className = "arkb-row";
-    for (const ch of AR_ALPHABET.slice(i, i + ARKB_COLS)) {
+    for (const k of row) {
       const b = document.createElement("button");
       b.className = "arkb-key";
-      b.dataset.letter = "1";              // 供回归脚本识别「字母键」而不是功能键
-      b.textContent = ch;
-      b.setAttribute("aria-label", "阿拉伯字母 " + ch);
-      b.addEventListener("click", () => onArKey(ch));
+      if (k === "空格") { b.classList.add("wide", "fn"); b.textContent = "空格"; }
+      else if (k === "⌫") { b.classList.add("wide", "fn"); b.textContent = "⌫"; }
+      else if (k === "清空") { b.classList.add("wide", "fn"); b.textContent = "清空"; }
+      else b.textContent = k;
+      b.addEventListener("click", () => onArKey(k));
       r.appendChild(b);
     }
     frag.appendChild(r);
   }
-  const rf = document.createElement("div");
-  rf.className = "arkb-row";
-  for (const k of AR_FUNCS) {
-    const b = document.createElement("button");
-    b.className = "arkb-key fn";            // .fn 在 CSS 里占 2 列 → 3 个功能键正好铺满 6 列
-    b.textContent = k;
-    b.addEventListener("click", () => onArKey(k));
-    rf.appendChild(b);
-  }
-  frag.appendChild(rf);
   box.appendChild(frag);
   box.dataset.built = "1";
 }
@@ -1459,17 +1236,8 @@ function setArkb(on) {
 
 function toggleArkb() { setArkb(el.arkb.hidden); }
 
-// 点大搜索框 → 解除只读 + 弹大键盘。
-// 首屏搜索框是 readonly 的：老人打开网页时最怕键盘自己弹出来把屏幕遮掉一半，
-// 所以做成「点一下才进入输入态」—— 这也是本变体（VariantC）与旧版的主要差异。
-function onSearchTap() {
-  if (el.search.readOnly) el.search.readOnly = false;
-  setArkb(true);
-}
-
 /* ============================ 事件绑定 ============================ */
 function bind() {
-  el.search.addEventListener('click', onSearchTap);
   el.search.addEventListener('input', () => { el.clear.hidden = !el.search.value; clearTimeout(bind._t); bind._t = setTimeout(runSearch, 260); });
   el.search.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runSearch(); pushHistory(el.search.value); el.search.blur(); } });
   el.clear.addEventListener('click', () => { el.search.value = ''; el.clear.hidden = true; el.results.hidden = true; S.hlQuery = ''; clearHighlights(); });
@@ -1487,7 +1255,7 @@ function bind() {
   $('btn-zoom-in').addEventListener('click', () => zoomTo(S.zoom * 1.35, el.viewer.clientWidth / 2, el.viewer.clientHeight / 2));
   $('btn-zoom-out').addEventListener('click', () => zoomTo(S.zoom / 1.35, el.viewer.clientWidth / 2, el.viewer.clientHeight / 2));
   $('btn-view').addEventListener('click', () => setViewMode(S.viewMode === 'column' ? 'page' : 'column'));
-  $('btn-cache-pdf').addEventListener('click', () => cachePdf(false));
+  $('btn-cache-pdf').addEventListener('click', cachePdf);
   $('btn-open-file').addEventListener('click', () => el.fileInput.click());
   el.fileInput.addEventListener('change', async () => {
     const f = el.fileInput.files?.[0];
@@ -1572,7 +1340,6 @@ async function reportDiag(extra = {}) {
   updateCounts();
   initGestures();
   updateViewBtn();
-  renderArkb();          // 预构建大键盘（面板仍隐藏）：首屏不弹键盘，但按下去时不用再等构建
   registerSW();
   el.pageTotal.textContent = `/ ${TOTAL_PAGES}`;
   const t0 = performance.now();
@@ -1596,6 +1363,4 @@ async function reportDiag(extra = {}) {
     })(),
   });
   toast('单栏阅读模式（字更大）· 点底栏 ▯ 可切换整页视图', 3200);
-  // 首次打开零操作自动离线缓存：等首屏渲染完再跑，不抢首屏带宽
-  setTimeout(() => { scheduleAutoCache(); }, AUTO_CACHE_DELAY);
 })();
