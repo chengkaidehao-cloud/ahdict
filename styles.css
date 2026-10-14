@@ -251,27 +251,32 @@ input { font: inherit; }
    搜索框只有 38px 高、图标按钮 40×40；同样的绝对尺寸放到 1000px+ 宽的平板上
    就显得极小、按不准 —— 他的原话是「搜索框变得巨小无比，跟电脑端一样」
    「旁边的目录框、设置三个点也特别小」。
-   这里只放大尺寸与字号，不动布局结构（保持他熟悉的 ☰ + 搜索框 + ⋯ + 底栏）。 */
+   这里只放大尺寸与字号，不动布局结构（保持他熟悉的 ☰ + 搜索框 + ⋯ + 底栏）。
+   第二轮（10-16）：框内三键 44 → 56px、页码框 54×112 → 60×124px，
+   三键重排为 8px 间距，补齐 ≥56px 适老化门槛。 */
 @media (min-width: 768px) {
   :root { --top-h: 78px; --bot-h: 66px; }
 
   /* 顶栏：图标 60px、搜索框 60px 高 / 22px 字 */
   #topbar { padding: var(--safe-t) 12px 0; gap: 8px; }
   .icon-btn { width: 60px; height: 60px; border-radius: 16px; font-size: 30px; }
+  /* 搜索框右侧预留 padding = 三键总占用（2 + 56*3 + 8*2 = 186）+ 12px 间隙 */
   #search {
-    height: 60px; padding: 0 152px 0 18px; border-radius: 16px; font-size: 22px;
+    height: 60px; padding: 0 198px 0 18px; border-radius: 16px; font-size: 22px;
   }
   #search::placeholder { font-size: 20px; }
-  .kb-btn { top: 8px; width: 44px; height: 44px; border-radius: 12px; font-size: 24px; }
-  #btn-arkb { right: 102px; }
-  #btn-cnkb { right: 54px; font-size: 19px; }
-  .clear-btn { right: 6px; top: 8px; width: 44px; height: 44px; font-size: 20px; }
+  /* 框内三键：44 → 56px（适老化目标），垂直居中于 60px 框内 = top 2px
+     自右向左：✕ [2,58] · 中 [66,122] · ع [130,186]，两两间隔 8px，互不重叠 */
+  .kb-btn { top: 2px; width: 56px; height: 56px; border-radius: 14px; font-size: 28px; }
+  #btn-arkb { right: 130px; }
+  #btn-cnkb { right: 66px; font-size: 24px; }
+  .clear-btn { right: 2px; top: 2px; width: 56px; height: 56px; border-radius: 14px; font-size: 26px; }
 
   /* 底栏：翻页 / 缩放 / 页码 */
   #bottombar { padding: 0 10px var(--safe-b); gap: 8px; }
   .nav-btn { width: 64px; height: 58px; border-radius: 14px; font-size: 30px; }
   .nav-btn.small { width: 56px; font-size: 26px; }
-  #page-input { width: 112px; height: 54px; font-size: 22px; border-radius: 12px; }
+  #page-input { width: 124px; height: 60px; font-size: 26px; border-radius: 14px; }
   #page-total { font-size: 19px; }
 
   /* 结果面板与抽屉 */
@@ -281,7 +286,7 @@ input { font: inherit; }
   .res-page { font-size: 17px; }
   .res-snippet { font-size: 18px; }
   .res-badge { font-size: 15px; padding: 0 8px; }
-  .star-btn, .row-del { width: 44px; height: 44px; font-size: 22px; }
+  .star-btn, .row-del { width: 48px; height: 48px; font-size: 24px; }
   #drawer { width: min(70vw, 560px); }
   #tree-search { height: 52px; font-size: 19px; border-radius: 12px; }
   .trow { padding: 13px 16px; }
@@ -289,13 +294,13 @@ input { font: inherit; }
   .trow .tp { font-size: 16px; }
   .trow.lvl1 { padding-left: 36px; }
   .trow.lvl2 { padding-left: 60px; font-size: 19px; }
-  .dtab { font-size: 19px; padding: 14px 6px; }
+  .dtab { font-size: 19px; padding: 14px 6px; min-height: 52px; }
   .dtab .cnt { font-size: 15px; min-width: 24px; }
   .muted { font-size: 17px; }
   #settings { left: 18vw; right: 18vw; }
   .row { padding: 16px 0; }
   .btn { padding: 13px 20px; font-size: 19px; border-radius: 12px; }
-  .btn.small { padding: 11px 16px; font-size: 17px; }
+  .btn.small { padding: 14px 16px; font-size: 17px; min-height: 48px; }
   .status { font-size: 17px; padding: 12px 20px; }
 
   /* 阿拉伯语键盘：每键更大（平板上 11 列仍有足够键宽） */
@@ -307,7 +312,8 @@ input { font: inherit; }
   .arkb-key.fn { font-size: 21px; }
 
   /* 词条级展开 */
-  .exp-btn { font-size: 17px; padding: 6px 12px; }
+  .exp-btn { font-size: 17px; padding: 12px 16px; min-height: 48px; }
+  .entry { padding: 11px 0; }
   .entry .e-ar { font-size: 22px; }
   .entry .e-cn { font-size: 17px; }
   .entry .e-conf { font-size: 14px; }
