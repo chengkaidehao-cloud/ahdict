@@ -1,7 +1,7 @@
 /* 新编阿汉大词典 · Service Worker：应用外壳离线 + 索引缓存 + PDF 可选缓存 */
 // 约定：任何改动本文件内容都必须提升 VER，否则 activate 不会清理旧外壳缓存。
 // v2 = 修复 PDF 缓存命中破坏 Range；v3 = 预缓存 roots.json；v4 = 离线 Range 流式切分；v5 = 按响应语义切片（不再依赖 onLine）
-const VER = 'v7';
+const VER = 'v8';
 const SHELL = `ahdict-shell-${VER}`;
 const DATA = `ahdict-data-${VER}`;
 const PDFC = 'ahdict-pdf-v1';

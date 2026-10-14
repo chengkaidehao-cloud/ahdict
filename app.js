@@ -1226,8 +1226,30 @@ function onArKey(k) {
   insertToSearch(k === "空格" ? " " : k);
 }
 
+/* 中文输入：默认 inputmode=none —— 点搜索框只聚焦、不弹任何键盘（不与系统键盘冲突）。
+   只有点「中」时才临时放开，让系统中文输入法弹出来；失焦立刻收回。 */
+let _cnSwitching = false;   // 切换中文输入时短暂置位：否则内部的 blur() 会触发 blur 监听把自己关掉
+function setCnInput(on) {
+  const inp = el.search;
+  const b = $('btn-cnkb');
+  if (on) {
+    if (!el.arkb.hidden) setArkb(false);   // 两个键盘互斥：放开系统键盘就关掉阿语键盘
+    _cnSwitching = true;
+    inp.setAttribute('inputmode', 'search');
+    if (b) b.classList.add('on');
+    inp.blur();                       // 先失焦再聚焦，确保新的 inputmode 生效
+    setTimeout(() => { inp.focus(); _cnSwitching = false; }, 30);
+  } else {
+    if (inp.getAttribute('inputmode') === 'none') return;
+    inp.setAttribute('inputmode', 'none');
+    if (b) b.classList.remove('on');
+    inp.blur();                       // 关掉已经弹出来的系统键盘
+  }
+}
+
 function setArkb(on) {
   renderArkb();
+  if (on) setCnInput(false);          // 阿语键盘与系统中文键盘互斥：开一个就关另一个
   el.arkb.hidden = !on;
   const b = $("btn-arkb");
   if (b) b.classList.toggle("on", on);
@@ -1283,6 +1305,9 @@ function bind() {
     S.history = []; saveUser(); renderHistory(); updateCounts(); toast('历史已清空');
   });
   $('btn-arkb').addEventListener('click', toggleArkb);
+  const cnBtn = $('btn-cnkb');
+  if (cnBtn) cnBtn.addEventListener('click', () => setCnInput(!cnBtn.classList.contains('on')));
+  el.search.addEventListener('blur', () => { if (!_cnSwitching) setCnInput(false); });   // 失焦即收回（切换中跳过）
   $('btn-close-arkb').addEventListener('click', () => setArkb(false));
   // 视口变化处理：只有「宽度」真正变化才需要重绘。
   // 手机滚动时地址栏收起/展开会持续改变视口高度，若也跟着重绘就会一直闪。

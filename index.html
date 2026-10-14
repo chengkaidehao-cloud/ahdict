@@ -10,16 +10,17 @@
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="apple-touch-icon" href="./icons/icon-192.png">
 <title>新编阿汉大词典</title>
-<link rel="stylesheet" href="./styles.css?v=9">
+<link rel="stylesheet" href="./styles.css?v=10">
 </head>
 <body>
 
 <header id="topbar">
   <button id="btn-menu" class="icon-btn" title="词根目录" aria-label="词根目录">☰</button>
   <div class="search-wrap">
-    <input id="search" type="search" autocomplete="off" autocorrect="off" spellcheck="false"
-           placeholder="输入阿拉伯语词 / 中文释义…" aria-label="搜索">
+    <input id="search" type="search" inputmode="none" autocomplete="off" autocorrect="off" spellcheck="false"
+           placeholder="点 ع 打阿语 · 点 中 打中文" aria-label="搜索">
     <button id="btn-arkb" class="kb-btn" title="阿拉伯语键盘" aria-label="阿拉伯语键盘">ع</button>
+    <button id="btn-cnkb" class="kb-btn" title="中文输入（用系统键盘）" aria-label="中文输入">中</button>
     <button id="btn-clear" class="clear-btn" hidden aria-label="清除">✕</button>
   </div>
   <button id="btn-more" class="icon-btn" title="设置" aria-label="设置">⋯</button>
@@ -131,6 +132,6 @@
   </div>
 </section>
 
-<script type="module" src="./app.js?v=9"></script>
+<script type="module" src="./app.js?v=10"></script>
 </body>
 </html>
